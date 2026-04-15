@@ -697,7 +697,7 @@ class PinguExit:
                                font=ctk.CTkFont(size=11), text_color="#455a64")
         info_lbl.pack(anchor="w", padx=4, pady=(0,6))
         
-        self.cap_target = _campo(p, "URL Real a clonar/interceptar:", "Ej: https://moodle.instituto.com", width=280)
+        self.cap_target = _campo(p, "URL Real a clonar/interceptar:", "Ej: https://moodle.ejemplo.com", width=280)
         
         phish_row = ctk.CTkFrame(p, fg_color="transparent")
         phish_row.pack(fill="x", pady=4)

