@@ -39,8 +39,8 @@ Pensada para **laboratorios de ciberseguridad**, **formación técnica** y **pru
 | 🔍 **Escáner LAN** | Descubrimiento de dispositivos en la red local mediante ARP scanning con identificación de fabricante |
 | 💥 **DDoS Local** | Ataques de prueba: SYN Flood, Ping Flood, UDP Flood, HTTP GET/POST Flood con multithreading y rotación de User-Agent |
 | 📡 **Sniffer** | Captura de paquetes en tiempo real con filtros BPF (HTTP, DNS, HTTPS, ARP) y contador de paquetes |
-| 🌐 **DNS/CAPTURA** | DNS Spoofing con reglas personalizables + Proxy Reverso Dinámico (estilo Evilginx) con soporte de phishlets JSON |
-| 🖥 **Veyon** | Congelación/reanudación de procesos Veyon, bloqueo persistente del puerto 11100, monitor de alerta temprana y Wake-on-LAN |
+| 🌐 **DNS Spoofing** | Ataque MITM completo: ARP poisoning + interceptación DNS + servidor HTTP con páginas falsas seleccionables y captura de credenciales |
+| 🪤 **CAPTURA** | Proxy Reverso Dinámico (estilo Evilginx) con soporte de phishlets JSON |
 
 **Otras funciones transversales:**
 - Auto-elevación de privilegios al iniciar (UAC, Windows)
@@ -58,7 +58,6 @@ Pensada para **laboratorios de ciberseguridad**, **formación técnica** y **pru
 | **CustomTkinter** | Interfaz gráfica moderna (tema oscuro) |
 | **Scapy** | ARP Spoofing, escaneo LAN, sniffer, DNS Spoofing |
 | **Npcap** | Driver de captura de paquetes (Windows) |
-| **psutil** | Gestión de procesos (congelar/matar Veyon) |
 | **requests** | Proxy reverso HTTP (forwarding al servidor original) |
 | **winreg** | Modificación del registro de Windows (hostname, TTL) |
 | **threading / queue** | Concurrencia thread-safe en todas las operaciones de red |
@@ -87,12 +86,13 @@ PhantomIntelligence_v5/
 │   ├── scanner.py              # Escáner LAN (ARP scan por rango)
 │   ├── ddos.py                 # Ataques de denegación de servicio locales
 │   ├── sniffer.py              # Captura de paquetes con filtros BPF
+│   ├── dns_spoof.py            # DNS Spoofing MITM (ARP + DNS + HTTP server)
 │   ├── universal_proxy.py      # Proxy reverso dinámico con phishlets JSON
-│   ├── moodle_capture.py       # Servidor HTTP de captura de credenciales
-│   └── veyon.py                # Control de Veyon, Wake-on-LAN, firewall persistente
+│   └── moodle_capture.py       # Servidor HTTP de captura de credenciales
 │
 ├── data/
 │   ├── useragents.txt          # Lista de User-Agents para rotación en DDoS HTTP
+│   ├── pages/                  # Páginas HTML personalizadas para DNS Spoofing
 │   └── phishlets/              # Configuraciones JSON de phishlets
 │       ├── moodle.json         # Phishlet para plataformas Moodle
 │       └── linkedin.json       # Phishlet para LinkedIn
@@ -194,26 +194,23 @@ La interfaz se abrirá con 8 pestañas. Selecciona el módulo que necesitas y si
 2. Pulsa **▶ Iniciar captura** → el contador de paquetes se actualiza en tiempo real.
 3. Pulsa **■ Detener** para finalizar la captura.
 
-### 🌐 DNS / CAPTURA
-**DNS Spoofing:**
-1. Introduce el dominio a interceptar y la IP falsa (tu IP local).
-2. Pulsa **+ Añadir regla** → **▶ Activar DNS Spoof**.
+### 🌐 DNS Spoofing
+1. Introduce el **dominio** a interceptar (ej. `moodle.instituto.es`, sin `https://`).
+2. Introduce la **IP de la víctima** (ej. `192.168.1.50`).
+3. Selecciona la **página falsa** a mostrar (Moodle, Google, Login genérico, o archivos `.html` de `data/pages/`).
+4. Pulsa **Iniciar Ataque DNS** → el sistema activa automáticamente:
+   - **ARP Spoofing** bidireccional sobre la víctima
+   - **IP Forwarding** (la víctima no pierde internet)
+   - **DNS Spoofing** (intercepta las peticiones del dominio y responde con tu IP)
+   - **Servidor HTTP** en puerto 80 (sirve la página falsa)
+5. Las credenciales capturadas se guardan en `logs/dns_capturas.txt`.
+6. Pulsa **Detener Todo** para restaurar ARP y parar todos los servicios.
 
-**Proxy Reverso Dinámico:**
+### 🪤 CAPTURA (Proxy Reverso)
 1. Introduce la URL real a clonar (ej. `https://moodle.ejemplo.com`).
 2. Selecciona el phishlet JSON correspondiente (Moodle, LinkedIn…).
 3. Pulsa **🎓 Activar Proxy Dinámico** → el proxy intercepta credenciales y cookies.
 4. Los datos capturados se guardan en `logs/tokens.txt` y `logs/cookies.txt`.
-
-### 🖥 Veyon
-- **Wake-on-LAN:** Envía un Magic Packet a la MAC indicada.
-- **Gestión de claves .pem:** Busca, carga y muestra claves Veyon del sistema.
-- **Congelar / Descongelar:** Suspende o reanuda procesos Veyon con psutil.
-- **Forzar Cierre:** Kill forzado (psutil + taskkill /F).
-- **Bloquear puerto 11100:** Añade una regla de firewall con `netsh advfirewall`.
-- **Monitor (Alerta temprana):** Captura tráfico TCP en el puerto 11100 y lanza una alerta visual.
-- **Guardián Firewall (Persistente):** Reaplica la regla de firewall cada 5 segundos si es eliminada.
-
 ---
 
 ## ⚙️ Configuración

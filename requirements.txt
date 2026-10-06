@@ -1,5 +1,7 @@
-customtkinter
-scapy
-requests
-psutil
-ipaddress
+# PhantomIntelligence v5 — Dependencias
+# Instala con: pip install -r requirements.txt
+# Nota: 'ipaddress' es stdlib desde Python 3.3 y no necesita instalarse.
+
+customtkinter>=5.2.0
+scapy>=2.5.0
+requests>=2.28.0

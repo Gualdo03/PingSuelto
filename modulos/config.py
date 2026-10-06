@@ -9,7 +9,7 @@ import queue
 
 __all__ = [
     '_estado', '_dns_reglas', 'MAC', 'GATEWAY', 'IP_LOCAL', 'DIR_BASE',
-    'SCAPY_OK', 'PSUTIL_OK', 'COL', 'PHISHING_PAGE_HTML'
+    'SCAPY_OK', 'COL', 'PHISHING_PAGE_HTML'
 ]
 
 # Estado global de hilos
@@ -24,7 +24,6 @@ DIR_BASE = None
 
 # Dependencias opcionales
 SCAPY_OK = False
-PSUTIL_OK = False
 
 # Colores para logs
 COL = {

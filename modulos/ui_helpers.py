@@ -6,21 +6,24 @@ Componentes UI reutilizables para CustomTkinter
 import customtkinter as ctk
 
 __all__ = ['_pad', '_sep', '_btn_row', '_campo', '_out', '_btn']
-from tkinter import scrolledtext
+
 
 def _pad(p, h=8):
     """Espaciador vertical."""
     ctk.CTkFrame(p, height=h, fg_color="transparent").pack()
 
+
 def _sep(p):
     """Separador horizontal."""
     ctk.CTkFrame(p, height=1, fg_color="#252525").pack(fill="x", pady=8)
+
 
 def _btn_row(p, pady=6):
     """Fila para botones."""
     f = ctk.CTkFrame(p, fg_color="transparent")
     f.pack(fill="x", pady=pady)
     return f
+
 
 def _campo(parent, label, placeholder="", valor="", width=220):
     """Campo de entrada con etiqueta."""
@@ -35,31 +38,58 @@ def _campo(parent, label, placeholder="", valor="", width=220):
     e.pack(side="left")
     return e
 
+
 def _out(parent, height=8):
-    """Área de texto con scroll."""
-    txt = scrolledtext.ScrolledText(
-        parent, height=height,
-        bg="#0a0a0a", fg="#b0bec5",
-        insertbackground="#4fc3f7",
-        font=("Consolas", 11),
-        borderwidth=0, highlightthickness=0, relief="flat",
-        selectbackground="#1565c0"
+    """Área de texto con scroll usando CTkTextbox nativo de CustomTkinter."""
+    txt = ctk.CTkTextbox(
+        parent,
+        height=height * 22,          # CTkTextbox usa píxeles, no líneas
+        fg_color="#0a0a0a",
+        text_color="#b0bec5",
+        font=("Consolas", 13),
+        corner_radius=6,
+        border_width=1,
+        border_color="#1e1e1e",
+        scrollbar_button_color="#252525",
+        scrollbar_button_hover_color="#333333",
+        activate_scrollbars=True,
+        wrap="word",
     )
     txt.pack(fill="both", expand=True, pady=(2, 4))
+
+    # Compatibilidad con el motor de logging que usa insert / delete / see / tag_config / index
+    # CTkTextbox delega en un tk.Text interno: exponemos los métodos necesarios
+    _patch_ctktextbox(txt)
     return txt
+
+
+def _patch_ctktextbox(txt):
+    """Añade alias de métodos de tk.Text al CTkTextbox para compatibilidad con el LoggerEngine."""
+    inner = txt._textbox  # widget tk.Text interno de CTkTextbox
+
+    # Alias directos al widget interno
+    txt.insert = inner.insert
+    txt.delete = inner.delete
+    txt.see    = inner.see
+    txt.index  = inner.index
+    txt.get    = inner.get
+    txt.tag_config    = inner.tag_config
+    txt.tag_configure = inner.tag_configure
+    txt.tag_add       = inner.tag_add
+
 
 def _btn(parent, text, cmd, color="#1565c0", **kw):
     """Botón estándar con efecto hover."""
     def _dark(h):
         try:
-            r,g,b = int(h[1:3],16), int(h[3:5],16), int(h[5:7],16)
+            r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
             return f"#{max(r-35,0):02x}{max(g-35,0):02x}{max(b-35,0):02x}"
-        except Exception: 
+        except Exception:
             return h
-    
+
     height = kw.pop("height", 34)
     corner_radius = kw.pop("corner_radius", 7)
-    
+
     return ctk.CTkButton(parent, text=text, fg_color=color,
                          hover_color=_dark(color),
                          font=ctk.CTkFont(size=12, weight="bold"),

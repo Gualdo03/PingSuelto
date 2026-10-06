@@ -39,6 +39,11 @@ data/key.pem
 Thumbs.db
 desktop.ini
 
-# Archivos de notas personales
+# Archivos de notas personales (no requirements.txt ni useragents.txt)
 *.txt
+!requirements.txt
 !data/useragents.txt
+
+# Carpeta de pruebas / experimentos locales (no pertenece al repo)
+pruebas arp/
+pruebas*/
