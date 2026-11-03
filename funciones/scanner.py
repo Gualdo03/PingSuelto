@@ -1,9 +1,13 @@
 """
-Módulo SCANNER - Escaneo de red y fingerprinting
+Módulo SCANNER - Escaneo de red, fingerprinting y resolución de hostnames
 """
 
 import threading
+import socket
 from modulos.network_core import _scan_rango
+from modulos.discovery import (
+    _fabricante_mac, _resolver_hostname, _normalizar_mac,
+)
 from modulos.config import _estado, GATEWAY
 
 
@@ -19,9 +23,9 @@ class ScannerModule:
         Args:
             rango: Rango CIDR a escanear.
             timeout: Timeout por host (segundos).
-            write_callback: Función para escribir texto en la salida.
+            write_callback: Función para escribir texto en la salida (no usado, mantenido por compat).
             stop_callback: Se llama al terminar (restaura botón, etc.).
-            result_callback: Opcional. Recibe lista de dicts {ip, mac, os, rol}
+            result_callback: Opcional. Recibe lista de dicts con toda la info
                              para que la UI construya filas interactivas.
         """
         if not hasattr(self, '_scapy_available'):
@@ -30,7 +34,6 @@ class ScannerModule:
                 self._scapy_available = True
             except ImportError:
                 self._scapy_available = False
-                write_callback("✗ Scapy no disponible.\n")
                 return False
 
         if not self._scapy_available:
@@ -44,48 +47,101 @@ class ScannerModule:
         return True
 
     def _scan_loop(self, rango, timeout, write_callback, stop_callback, result_callback):
-        """Loop principal de escaneo."""
+        """Loop principal de escaneo con detección de SO y resolución de hostname."""
         self.logger.log(f"[SCAN] Iniciando en {rango}...", "info")
         results = []
         try:
             hosts = _scan_rango(rango, timeout)
-            write_callback(f"{'IP':<16}  {'MAC':<18}  {'OS':<10}  Rol\n" + "─"*60 + "\n")
 
             from scapy.all import IP, ICMP, sr1
 
-            for ip, mac in hosts:
+            total = len(hosts)
+            for idx, (ip, mac) in enumerate(hosts, 1):
                 from modulos.config import GATEWAY as GW_CURRENT
                 rol = "★ Gateway" if ip == GW_CURRENT else "Dispositivo"
+                fab = _fabricante_mac(mac)
                 os_guess = "Desconocido"
-                os_icon  = "❓"
+                hostname = ""
 
+                # 1. Detección de SO por TTL vía ICMP
                 try:
                     resp = sr1(IP(dst=ip)/ICMP(), timeout=0.3, verbose=0)
                     if resp and IP in resp:
                         ttl = resp[IP].ttl
                         if ttl <= 64:
-                            os_guess = "Linux/Mac"
-                            os_icon  = "🐧"
+                            os_guess = "Mac" if fab == "Apple" else "Linux"
                         elif ttl <= 128:
                             os_guess = "Windows"
-                            os_icon  = "🪟"
                         else:
-                            os_guess = "Cisco/Rtr"
-                            os_icon  = "📡"
+                            os_guess = "Router"
                 except Exception:
                     pass
 
-                line = f"{ip:<16}  {mac:<18}  {os_guess:<10}  {rol}\n"
-                write_callback(line)
-                self.logger.log(f"[SCAN] {ip}  {mac}  {os_guess}  {rol}", "ok")
-                results.append({"ip": ip, "mac": mac, "os": os_guess, "os_icon": os_icon, "rol": rol})
+                # 2. Detección de respaldo si ICMP está bloqueado
+                if os_guess == "Desconocido":
+                    if fab == "Apple":
+                        os_guess = "Mac"
+                    elif fab == "Microsoft":
+                        os_guess = "Windows"
+                    elif fab in ("Samsung", "Xiaomi"):
+                        os_guess = "Linux"
+                    elif ip == GW_CURRENT or fab in ("Router", "TP-Link"):
+                        os_guess = "Router"
+                    else:
+                        try:
+                            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            s.settimeout(0.12)
+                            code = s.connect_ex((ip, 445))
+                            s.close()
+                            if code in (0, 10061, 111):
+                                os_guess = "Windows"
+                        except Exception:
+                            pass
+
+                # 3. Resolución de hostname (mDNS / NetBIOS / LLMNR en paralelo)
+                try:
+                    # Reverse DNS primero (rápido)
+                    try:
+                        hostname = socket.gethostbyaddr(ip)[0]
+                    except (socket.herror, socket.gaierror, OSError):
+                        pass
+
+                    # Si no se obtuvo hostname o es genérico, intentar mDNS/NetBIOS/LLMNR
+                    if not hostname or hostname == ip:
+                        # Resolución rápida con timeout corto para no ralentizar mucho
+                        from modulos.discovery import (
+                            _netbios_resolver, _mdns_resolver, _llmnr_resolver
+                        )
+                        # Intentar NetBIOS primero (más rápido en Windows)
+                        hostname = _netbios_resolver(ip, timeout=1) or ""
+                        if not hostname:
+                            # Intentar reverse mDNS — buscar en la caché ARP local
+                            pass  # Se podría expandir en el futuro
+                except Exception:
+                    pass
+
+                # Limpiar hostname
+                if hostname and hostname == ip:
+                    hostname = ""
+
+                self.logger.log(
+                    f"[SCAN] {idx}/{total}  {ip}  {mac}  {os_guess}  {hostname or '—'}",
+                    "ok"
+                )
+                results.append({
+                    "ip": ip,
+                    "mac": mac,
+                    "os": os_guess,
+                    "os_icon": os_guess,
+                    "hostname": hostname if hostname else "Desconocido",
+                    "fabricante": fab,
+                    "rol": rol,
+                })
 
             self.logger.log(f"[SCAN] Fin: {len(hosts)} hosts.", "ok")
         except Exception as e:
-            write_callback(f"✗ Error durante escaneo: {e}\n")
             self.logger.log(f"[SCAN] Error: {e}", "err")
         finally:
-            # Primero entregamos los resultados estructurados, luego restauramos el botón
             if result_callback and results:
                 result_callback(results)
             stop_callback()

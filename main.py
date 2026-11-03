@@ -26,6 +26,15 @@ from modulos.ui_helpers import *
 from modulos.network_core import *
 from modulos.system_utils import _auto_elevate, _restart_admin, _is_admin, is_sandbox
 from modulos.logger_engine import LoggerEngine
+from modulos.discovery import (
+    clasificar_objetivo, _normalizar_mac, _buscar_ip_por_mac,
+    _resolver_hostname,
+)
+from modulos.device_db import (
+    guardar_escaneo, enriquecer_resultados, obtener_alias,
+    establecer_alias, establecer_notas, obtener_notas,
+    obtener_dispositivo,
+)
 
 # Auto-elevación de privilegios al inicio
 # (si no somos admin, lanza proceso elevado y termina INMEDIATAMENTE)
@@ -91,8 +100,8 @@ class PinguExit:
     def __init__(self, root: ctk.CTk):
         self.root = root
         self.root.title("PhantomIntelligence_v5 - Stealth Edition")
-        self.root.geometry("880x740")
-        self.root.minsize(800, 620)
+        self.root.geometry("1000x740")
+        self.root.minsize(920, 620)
 
         # Asegurarse de que las funciones del sistema estén disponibles
         import modulos.system_utils
@@ -152,12 +161,15 @@ class PinguExit:
         self._badges: dict[str, ctk.CTkLabel] = {}
 
         # ── ARP ──
-        self.arp_ip        = None
+        self.arp_obj      = None   # Objetivo: IP, MAC o hostname
         self.arp_gw        = None
         self.arp_int       = None
         self.arp_stealth   = None
         self.arp_jitter    = None
         self.arp_oui_var   = None
+        self.arp_track     = None   # Seguimiento dinámico (IP cambiante)
+        self.arp_garp      = None   # Gratuitous ARP broadcast
+        self.arp_multi     = None   # Modo multi-target
         self.arp_start_btn = None
         self.arp_stop_btn  = None
         self.arp_out       = None
@@ -172,8 +184,10 @@ class PinguExit:
         self.scan_rango   = None
         self.scan_timeout = None
         self.scan_btn     = None
-        self.scan_out     = None
         self.scan_results_frame = None   # frame con filas interactivas
+        self.scan_filter_var = None      # filtro en tiempo real
+        self._scan_results_data = []     # datos crudos del último escaneo
+        self._scan_hdr_frame = None      # header de la tabla
 
         # ── DDoS ──
         self.ddos_ip        = None
@@ -313,44 +327,21 @@ class PinguExit:
         )
         self._lbl_net_info.pack(side="left", padx=14)
 
-        # Pestañas
-        self.nb = ctk.CTkTabview(
-            self.root, corner_radius=8,
-            fg_color="#141414",
-            segmented_button_fg_color="#0d0d0d",
-            segmented_button_selected_color="#0d47a1",
-            segmented_button_unselected_color="#0d0d0d",
-            segmented_button_selected_hover_color="#1565c0",
-            text_color="#9e9e9e",
-            text_color_disabled="#444444",
-        )
-        self.nb.pack(fill="both", expand=True, padx=12, pady=(8, 0))
-
-        tabs = [
-            ("👻 GHOST",       self._build_ghost),
-            ("⚡ ARP",         self._build_arp),
-            ("🎭 MAC",         self._build_mac),
-            ("🔍 Escáner",     self._build_scanner),
-            ("💥 DDoS",        self._build_ddos),
-            ("📡 Sniffer",     self._build_sniffer),
-            ("🌐 DNS",         self._build_dns),
-            ("🪤 CAPTURA",     self._build_captura),
-        ]
-        for nombre, fn in tabs:
-            self.nb.add(nombre)
-            fn(self.nb.tab(nombre))
-
-        # Barra de estado con badges
+        # ── Elementos fijos inferiores (anclados abajo con side="bottom" para que siempre sean visibles) ──
+        # 1. Barra de estado inferior con badges
         self._make_status_bar()
 
-        # Consola global
+        # 2. Consola de registro global (siempre visible, altura ampliada para ver bien los registros)
+        self.consola = _out(self.root, height=6, expand=False, side="bottom", padx=12, pady=(0, 4))
+
+        # 3. Barra de control del registro global (justo encima de la consola)
         bar = ctk.CTkFrame(self.root, height=24, corner_radius=0, fg_color="#0d0d0d")
-        bar.pack(fill="x")
+        bar.pack(fill="x", side="bottom")
         bar.pack_propagate(False)
 
         ctk.CTkLabel(bar, text=" REGISTRO GLOBAL",
                      font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color="#3a3a3a").pack(side="left", padx=8)
+                     text_color="#546e7a").pack(side="left", padx=8)
 
         # Botones de la barra de registro
         _bf_log = ctk.CTkFrame(bar, fg_color="transparent")
@@ -374,8 +365,32 @@ class PinguExit:
                       command=lambda: self.consola.delete("1.0", "end")
                       ).pack(side="left", padx=(2, 8), pady=3)
 
-        self.consola = _out(self.root, 8)
-        self.consola.pack(fill="x", padx=12, pady=(0, 4))
+        # ── Pestañas principales (se expanden llenando TODO el espacio central) ──
+        self.nb = ctk.CTkTabview(
+            self.root, corner_radius=8,
+            fg_color="#141414",
+            segmented_button_fg_color="#0d0d0d",
+            segmented_button_selected_color="#0d47a1",
+            segmented_button_unselected_color="#0d0d0d",
+            segmented_button_selected_hover_color="#1565c0",
+            text_color="#9e9e9e",
+            text_color_disabled="#444444",
+        )
+        self.nb.pack(fill="both", expand=True, padx=12, pady=(6, 2))
+
+        tabs = [
+            ("🔍 Escáner",     self._build_scanner),
+            ("⚡ ARP",         self._build_arp),
+            ("🎭 MAC",         self._build_mac),
+            ("👻 GHOST",       self._build_ghost),
+            ("💥 DDoS",        self._build_ddos),
+            ("📡 Sniffer",     self._build_sniffer),
+            ("🌐 DNS",         self._build_dns),
+            ("🪤 CAPTURA",     self._build_captura),
+        ]
+        for nombre, fn in tabs:
+            self.nb.add(nombre)
+            fn(self.nb.tab(nombre))
 
         # Tags de color para la consola
         for tag, color in COL.items():
@@ -498,13 +513,33 @@ class PinguExit:
     def _build_arp(self, p):
         """Construye la pestaña ARP."""
         _pad(p)
-        ctk.CTkLabel(p, text="ARP Spoofing — Intercepción de tráfico",
+        ctk.CTkLabel(p, text="ARP Spoofing — Corte total de internet (bidireccional)",
                      font=ctk.CTkFont(size=13, weight="bold"),
                      text_color="#546e7a").pack(anchor="w", padx=4, pady=(0, 6))
 
-        self.arp_ip  = _campo(p, "IP víctima:",              "Ej: 192.168.1.50")
+        ctk.CTkLabel(
+            p,
+            text="Objetivo: IP fija · MAC de hardware (seg. L2) · hostname (mDNS/NetBIOS) · * (toda la subred)",
+            font=ctk.CTkFont(size=10), text_color="#546e7a"
+        ).pack(anchor="w", padx=4, pady=(0, 2))
+
+        self.arp_obj = _campo(
+            p, "Objetivo (IP/MAC/host/*):",
+            "Ej: 192.168.1.50 · AA:BB:CC:DD:EE:FF · iPhone.local · * (todos)",
+            width=320
+        )
         self.arp_gw  = _campo(p, "Gateway (vacío=auto):",    valor=GATEWAY)
         self.arp_int = _campo(p, "Intervalo base (s):",      valor="2", width=80)
+
+        # Fila de seguimiento dinámico + pre-resolución
+        track_row = ctk.CTkFrame(p, fg_color="transparent")
+        track_row.pack(fill="x", pady=(0, 2))
+        self.arp_track = ctk.BooleanVar(value=True)
+        ctk.CTkSwitch(track_row, text="🎯 Seguimiento dinámico (IP cambiante)",
+                      variable=self.arp_track,
+                      font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 12))
+        self._btn(track_row, "🔎 Resolver objetivo", self._arp_resolver,
+                  "#1565c0", width=170).pack(side="right")
 
         # Opciones de evasión
         opts = ctk.CTkFrame(p, fg_color="#111111", corner_radius=6)
@@ -514,7 +549,7 @@ class PinguExit:
                      text_color="#455a64").pack(anchor="w", padx=8, pady=(6, 2))
 
         orow = ctk.CTkFrame(opts, fg_color="transparent")
-        orow.pack(fill="x", pady=(0, 8), padx=8)
+        orow.pack(fill="x", pady=(0, 4), padx=8)
         self.arp_stealth = ctk.BooleanVar(value=True)
         self.arp_jitter  = ctk.BooleanVar(value=True)
         self.arp_oui_var = ctk.StringVar(value="Ninguno")
@@ -527,13 +562,21 @@ class PinguExit:
                       font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 16))
 
         orow2 = ctk.CTkFrame(opts, fg_color="transparent")
-        orow2.pack(fill="x", pady=(0, 8), padx=8)
+        orow2.pack(fill="x", pady=(0, 4), padx=8)
         ctk.CTkLabel(orow2, text="Spoofear fabricante MAC:",
                      font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
         ctk.CTkOptionMenu(orow2, values=["Ninguno", "Apple", "Samsung", "Genérico"],
                           variable=self.arp_oui_var, width=130,
                           fg_color="#1a1a1a", button_color="#1565c0",
                           font=ctk.CTkFont(size=12)).pack(side="left")
+
+        # Opciones avanzadas: GARP + Multi-target
+        orow3 = ctk.CTkFrame(opts, fg_color="transparent")
+        orow3.pack(fill="x", pady=(0, 8), padx=8)
+        self.arp_garp = ctk.BooleanVar(value=False)
+        ctk.CTkSwitch(orow3, text="📡 Gratuitous ARP (broadcast a toda la red)",
+                      variable=self.arp_garp,
+                      font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 16))
 
         bf = _btn_row(p)
         self.arp_start_btn = self._btn(bf, "▶ Iniciar ARP Spoof", self._arp_start, "#c62828")
@@ -550,14 +593,12 @@ class PinguExit:
             self._npcap_warn()
             return
 
-        ip = self.arp_ip.get().strip()
-        if not ip:
-            messagebox.showwarning("Aviso", "Introduce la IP de la víctima.")
-            return
-        try:
-            ipaddress.ip_address(ip)
-        except ValueError:
-            messagebox.showwarning("Error de Entrada", "La IP de la víctima no tiene un formato válido.")
+        objetivo = self.arp_obj.get().strip()
+        if not objetivo:
+            messagebox.showwarning(
+                "Aviso",
+                "Introduce el objetivo (IP, MAC, hostname o * para toda la subred)."
+            )
             return
 
         gw = self.arp_gw.get().strip() or GATEWAY
@@ -565,21 +606,93 @@ class PinguExit:
             try:
                 ipaddress.ip_address(gw)
             except ValueError:
-                messagebox.showwarning("Error de Entrada", "La IP del Gateway no tiene un formato válido.")
+                messagebox.showwarning(
+                    "Error de Entrada", "La IP del Gateway no tiene un formato válido."
+                )
                 return
 
-        interval = float(self.arp_int.get() or 2)
+        try:
+            interval = float(self.arp_int.get() or 2)
+        except ValueError:
+            interval = 2
         oui = self.arp_oui_var.get().lower()
+        seguimiento = self.arp_track.get()
+        garp = self.arp_garp.get()
 
-        if self.arp_module.start_attack(
-            ip, gw, interval, self.arp_stealth.get(), self.arp_jitter.get(), oui,
-            lambda txt: self._write(self.arp_out, txt), self._arp_stop
-        ):
-            self.arp_start_btn.configure(state="disabled", fg_color="#37474f")
-            self.arp_stop_btn.configure(state="normal", fg_color="#c62828")
-            self.arp_out.delete("1.0", "end")
-            self._badge_set("arp", True)
+        # Detectar modo multi-target: "*" o lista separada por comas
+        is_multi = objetivo == "*" or "," in objetivo
 
+        if is_multi:
+            # Modo multi-target
+            if objetivo == "*":
+                targets_list = "*"
+            else:
+                targets_list = [t.strip() for t in objetivo.split(",") if t.strip()]
+                if not targets_list:
+                    messagebox.showwarning(
+                        "Aviso", "La lista de objetivos está vacía."
+                    )
+                    return
+
+            if self.arp_module.start_multi_attack(
+                targets_list, gw, interval, self.arp_stealth.get(),
+                self.arp_jitter.get(), oui,
+                lambda txt: self._write(self.arp_out, txt), self._arp_stop,
+                garp=garp
+            ):
+                self.arp_start_btn.configure(state="disabled", fg_color="#37474f")
+                self.arp_stop_btn.configure(state="normal", fg_color="#c62828")
+                self.arp_out.delete("1.0", "end")
+                self._badge_set("arp", True)
+        else:
+            # Modo single-target (original)
+            # Validación según el tipo de objetivo detectado
+            modo = clasificar_objetivo(objetivo)
+            if modo == "ip":
+                try:
+                    ipaddress.ip_address(objetivo)
+                except ValueError:
+                    messagebox.showwarning(
+                        "Error de Entrada", "La IP de la víctima no tiene un formato válido."
+                    )
+                    return
+            elif modo == "mac":
+                if not _normalizar_mac(objetivo):
+                    messagebox.showwarning(
+                        "Error de Entrada", "La MAC no tiene un formato válido (AA:BB:CC:DD:EE:FF)."
+                    )
+                    return
+            # modo "host": cualquier texto no vacío es un hostname válido
+
+            if self.arp_module.start_attack(
+                objetivo, gw, interval, self.arp_stealth.get(),
+                self.arp_jitter.get(), oui, seguimiento,
+                lambda txt: self._write(self.arp_out, txt), self._arp_stop,
+                garp=garp
+            ):
+                self.arp_start_btn.configure(state="disabled", fg_color="#37474f")
+                self.arp_stop_btn.configure(state="normal", fg_color="#c62828")
+                self.arp_out.delete("1.0", "end")
+                self._badge_set("arp", True)
+
+    def _arp_resolver(self):
+        """Pre-resuelve el objetivo (IP/MAC/hostname) sin atacar."""
+        if not SCAPY_OK:
+            self._npcap_warn()
+            return
+
+        objetivo = self.arp_obj.get().strip()
+        if not objetivo:
+            messagebox.showwarning(
+                "Aviso", "Introduce el objetivo (IP, MAC o hostname)."
+            )
+            return
+
+        self.arp_out.delete("1.0", "end")
+        self.arp_module.diagnosticar(
+            objetivo,
+            lambda txt: self._write(self.arp_out, txt),
+        )
 
     def _arp_stop(self):
         self.arp_module.stop_attack(lambda txt: self._write(self.arp_out, txt))
@@ -644,44 +757,76 @@ class PinguExit:
     # ── ESCÁNER ───────────────────────────────────────────────────────────────
     def _build_scanner(self, p):
         """Construye la pestaña Escáner con tabla interactiva de resultados."""
-        _pad(p)
+        _pad(p, 4)
         ctk.CTkLabel(p, text="Escáner LAN — Descubrimiento de dispositivos",
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color="#546e7a").pack(anchor="w", padx=4, pady=(0, 6))
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#4fc3f7").pack(anchor="w", padx=4, pady=(0, 6))
 
+        # Fila de controles: rango, timeout, botones
+        ctrl_row = ctk.CTkFrame(p, fg_color="transparent")
+        ctrl_row.pack(fill="x", pady=(0, 6))
+
+        ctk.CTkLabel(ctrl_row, text="Rango:", width=50, anchor="w",
+                     font=ctk.CTkFont(size=13)).pack(side="left")
         rango_def = self.scanner_module.get_default_range()
-        self.scan_rango   = _campo(p, "Rango de red:", valor=rango_def, width=220)
-        self.scan_timeout = _campo(p, "Timeout (s):",  valor="3",       width=60)
+        self.scan_rango = ctk.CTkEntry(ctrl_row, width=170, fg_color="#111111",
+                                        border_color="#2a2a2a",
+                                        font=ctk.CTkFont(size=13))
+        self.scan_rango.insert(0, rango_def)
+        self.scan_rango.pack(side="left", padx=(0, 10))
 
-        bf = _btn_row(p)
-        self.scan_btn = self._btn(bf, "🔍 Escanear red", self._scan_start, "#00695c")
-        self.scan_btn.pack(side="left")
+        ctk.CTkLabel(ctrl_row, text="Timeout:", width=65, anchor="w",
+                     font=ctk.CTkFont(size=13)).pack(side="left")
+        self.scan_timeout = ctk.CTkEntry(ctrl_row, width=50, fg_color="#111111",
+                                          border_color="#2a2a2a",
+                                          font=ctk.CTkFont(size=13))
+        self.scan_timeout.insert(0, "3")
+        self.scan_timeout.pack(side="left", padx=(0, 12))
 
-        # Panel dividido: log arriba, tabla interactiva abajo
-        _sep(p)
+        self.scan_btn = self._btn(ctrl_row, "🔍 Escanear", self._scan_start,
+                                   "#00695c", width=130, height=36)
+        self.scan_btn.pack(side="left", padx=(0, 6))
 
-        # Log de texto
-        ctk.CTkLabel(p, text="Salida del escaneo:",
-                     font=ctk.CTkFont(size=10), text_color="#455a64").pack(anchor="w")
-        self.scan_out = _out(p, 5)
+        self._btn(ctrl_row, "💾 Guardar en BD", self._scan_guardar_bd,
+                  "#1565c0", width=140, height=36).pack(side="left", padx=(0, 4))
 
-        # Título de la tabla
-        _sep(p)
-        hdr = ctk.CTkFrame(p, fg_color="#0d0d0d", corner_radius=4)
-        hdr.pack(fill="x", pady=(0, 2))
-        for txt, w in [("  SO", 40), ("IP", 120), ("MAC", 140), ("Rol", 80),
-                       ("→ ARP", 70), ("→ DDoS", 70)]:
-            ctk.CTkLabel(hdr, text=txt, width=w, anchor="w",
-                         font=ctk.CTkFont(size=11, weight="bold"),
-                         text_color="#546e7a").pack(side="left", padx=2, pady=4)
+        # Barra de filtro en tiempo real
+        filter_row = ctk.CTkFrame(p, fg_color="#0d0d0d", corner_radius=6)
+        filter_row.pack(fill="x", pady=(0, 6), ipady=4)
+        ctk.CTkLabel(filter_row, text=" 🔎 Buscar:",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color="#90a4ae", width=85, anchor="w").pack(side="left", padx=(6, 0))
+        self.scan_filter_var = ctk.StringVar()
+        self.scan_filter_var.trace_add("write", lambda *_: self._scan_apply_filter())
+        filt_entry = ctk.CTkEntry(filter_row, textvariable=self.scan_filter_var,
+                                   width=300, fg_color="#141414",
+                                   border_color="#333333",
+                                   font=ctk.CTkFont(size=13),
+                                   placeholder_text="Escribe para filtrar: IP, MAC, hostname, alias...")
+        filt_entry.pack(side="left", padx=(0, 12))
+
+        self._scan_lbl_count = ctk.CTkLabel(filter_row, text="",
+                                             font=ctk.CTkFont(size=12, weight="bold"),
+                                             text_color="#69f0ae")
+        self._scan_lbl_count.pack(side="left")
+
+        # Cabecera de la tabla (columnas centradas y con mayor separación)
+        self._scan_hdr_frame = ctk.CTkFrame(p, fg_color="#141418", corner_radius=5)
+        self._scan_hdr_frame.pack(fill="x", pady=(2, 0))
+        for txt, w in [("SO", 55), ("IP", 105), ("MAC", 130), ("Hostname", 110),
+                       ("Etiqueta", 140), ("Rol", 65),
+                       ("ARP", 40), ("MAC", 40), ("DDoS", 44), ("Acción", 120)]:
+            ctk.CTkLabel(self._scan_hdr_frame, text=txt, width=w, anchor="center",
+                         font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color="#78909c").pack(side="left", padx=3, pady=5)
 
         # Contenedor scrollable de resultados
         self.scan_results_frame = ctk.CTkScrollableFrame(
-            p, fg_color="#0a0a0a", corner_radius=4,
+            p, fg_color="#0a0a0a", corner_radius=0,
             scrollbar_button_color="#252525",
             scrollbar_button_hover_color="#333333",
         )
-        self.scan_results_frame.pack(fill="both", expand=True, pady=(0, 4))
+        self.scan_results_frame.pack(fill="both", expand=True, pady=(0, 0))
 
     def _scan_start(self):
         if not SCAPY_OK:
@@ -694,78 +839,325 @@ class PinguExit:
         except ValueError:
             timeout = 3
 
-        # Limpiar resultados anteriores
-        for w in self.scan_results_frame.winfo_children():
-            w.destroy()
-        self.scan_out.delete("1.0", "end")
-
         self.scan_btn.configure(state="disabled", text="Escaneando…")
+        # Mantener los dispositivos previos visibles en pantalla mientras se escanea
+        if self._scan_results_data:
+            self._scan_lbl_count.configure(
+                text=f"🔄 Escaneando... ({len(self._scan_results_data)} anteriores en pantalla)",
+                text_color="#ffb74d"
+            )
+        else:
+            self._scan_lbl_count.configure(text="🔄 Escaneando red...", text_color="#ffb74d")
 
         self.scanner_module.scan_network(
             rango, timeout,
-            write_callback   = lambda txt: self._write(self.scan_out, txt),
-            stop_callback    = lambda: self.scan_btn.configure(state="normal", text="🔍 Escanear red"),
+            write_callback   = lambda txt: None,
+            stop_callback    = lambda: self.scan_btn.configure(state="normal", text="🔍 Escanear"),
             result_callback  = lambda results: self.root.after(0, lambda r=results: self._scan_populate(r))
         )
 
     def _scan_populate(self, results: list):
-        """Construye las filas interactivas de la tabla de resultados del escáner."""
-        # Ordenar de menor a mayor IP de forma numérica (no lexicográfica)
-        results = sorted(results, key=lambda x: ipaddress.ip_address(x["ip"]))
-        for item in results:
-            ip      = item["ip"]
-            mac     = item["mac"]
-            os_icon = item["os_icon"]
-            rol     = item["rol"]
+        """Construye las filas interactivas de la tabla de resultados del escáner.
 
+        Re-escaneo incremental: conserva los dispositivos escaneados anteriormente,
+        incorpora los dispositivos nuevos y elimina automáticamente los que ya no responden.
+        """
+        results = sorted(results, key=lambda x: ipaddress.ip_address(x["ip"]))
+        results = enriquecer_resultados(results)
+
+        if self._scan_results_data:
+            # Mapa de dispositivos del escaneo anterior
+            prev_by_mac = {item.get("mac", "").lower(): item for item in self._scan_results_data}
+            current_macs = {item.get("mac", "").lower() for item in results}
+
+            num_nuevos = sum(1 for m in current_macs if m not in prev_by_mac)
+            num_eliminados = sum(1 for m in prev_by_mac if m not in current_macs)
+
+            merged = []
+            for item in results:
+                mac_key = item.get("mac", "").lower()
+                if mac_key in prev_by_mac:
+                    # Dispositivo ya existía: conservar alias, notas y hostname previo si aplica
+                    prev = prev_by_mac[mac_key]
+                    if prev.get("alias") and not item.get("alias"):
+                        item["alias"] = prev["alias"]
+                    if prev.get("notas") and not item.get("notas"):
+                        item["notas"] = prev["notas"]
+                    if prev.get("hostname") and not item.get("hostname"):
+                        item["hostname"] = prev["hostname"]
+                    if prev.get("known"):
+                        item["known"] = True
+                    item["es_nuevo"] = False
+                else:
+                    item["es_nuevo"] = True
+                merged.append(item)
+
+            self._scan_results_data = merged
+
+            # Detalles claros del re-escaneo
+            detalles = []
+            if num_nuevos > 0:
+                detalles.append(f"+{num_nuevos} nuevo{'s' if num_nuevos > 1 else ''}")
+            if num_eliminados > 0:
+                detalles.append(f"-{num_eliminados} desconectado{'s' if num_eliminados > 1 else ''}")
+
+            if detalles:
+                info_txt = f"{len(merged)} activos ({', '.join(detalles)})"
+            else:
+                info_txt = f"{len(merged)} activos (sin cambios)"
+
+            self._scan_lbl_count.configure(text=info_txt, text_color="#69f0ae")
+            self._log(f"[SCAN] Actualizado: {info_txt}", "ok")
+        else:
+            for item in results:
+                item["es_nuevo"] = False
+            self._scan_results_data = results
+            self._scan_lbl_count.configure(text=f"{len(results)} dispositivos encontrados", text_color="#69f0ae")
+            self._log(f"[SCAN] Fin: {len(results)} dispositivos encontrados.", "ok")
+
+        self._scan_render(self._scan_results_data)
+
+    def _scan_apply_filter(self):
+        """Aplica el filtro de búsqueda en tiempo real sobre los resultados."""
+        filtro = self.scan_filter_var.get().strip().lower()
+        if not filtro:
+            self._scan_render(self._scan_results_data)
+            return
+
+        filtered = []
+        for item in self._scan_results_data:
+            # Buscar en IP, MAC, hostname, alias, SO, rol
+            haystack = " ".join([
+                item.get("ip", ""),
+                item.get("mac", ""),
+                item.get("hostname", ""),
+                item.get("alias", ""),
+                item.get("os", ""),
+                item.get("rol", ""),
+            ]).lower()
+            if filtro in haystack:
+                filtered.append(item)
+        self._scan_render(filtered)
+
+    def _scan_render(self, results: list):
+        """Renderiza las filas de resultados en la tabla."""
+        for w in self.scan_results_frame.winfo_children():
+            w.destroy()
+
+        total = len(self._scan_results_data)
+        shown = len(results)
+        if total > 0:
+            txt = f"{shown}/{total} dispositivos" if shown != total else f"{total} dispositivos encontrados"
+            self._scan_lbl_count.configure(text=txt)
+        else:
+            self._scan_lbl_count.configure(text="")
+
+        so_colores = {
+            "Windows":     "#64b5f6",
+            "Linux":       "#81c784",
+            "Mac":         "#ce93d8",
+            "Router":      "#ffb74d",
+            "Desconocido": "#607d8b",
+        }
+        # Abreviar SO para ancho consistente
+        so_corto = {
+            "Desconocido": "N/D",
+        }
+
+        for idx, item in enumerate(results):
+            ip       = item["ip"]
+            mac      = item["mac"]
+            os_name  = item.get("os", "Desconocido")
+            hostname = item.get("hostname", "")
+            alias    = item.get("alias", "")
+            rol      = item["rol"]
+            known    = item.get("known", False)
+
+            # Fila con colores alternados
             row = ctk.CTkFrame(
                 self.scan_results_frame,
-                fg_color="#111111" if results.index(item) % 2 == 0 else "#0e0e0e",
-                corner_radius=3
+                fg_color="#131318" if idx % 2 == 0 else "#0e0e12",
+                corner_radius=4
             )
-            row.pack(fill="x", pady=1)
+            row.pack(fill="x", pady=1, padx=2)
 
-            ctk.CTkLabel(row, text=f" {os_icon}", width=40, anchor="w",
-                         font=ctk.CTkFont(size=13)).pack(side="left", padx=2)
-            ctk.CTkLabel(row, text=ip,  width=120, anchor="w",
-                         font=ctk.CTkFont(family="Consolas", size=11),
-                         text_color="#4fc3f7").pack(side="left", padx=2)
-            ctk.CTkLabel(row, text=mac, width=140, anchor="w",
-                         font=ctk.CTkFont(family="Consolas", size=11),
-                         text_color="#ce93d8").pack(side="left", padx=2)
-            ctk.CTkLabel(row, text=rol, width=80, anchor="w",
-                         font=ctk.CTkFont(size=11),
-                         text_color="#ffca28" if "Gateway" in rol else "#b0bec5").pack(side="left", padx=2)
+            # SO — texto abreviado si es "Desconocido"
+            so_txt = so_corto.get(os_name, os_name)
+            so_color = so_colores.get(os_name, "#607d8b")
+            ctk.CTkLabel(row, text=so_txt, width=55, anchor="center",
+                         font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color=so_color).pack(side="left", padx=3)
+            # IP
+            ctk.CTkLabel(row, text=ip, width=105, anchor="center",
+                         font=ctk.CTkFont(family="Consolas", size=12),
+                         text_color="#4fc3f7").pack(side="left", padx=3)
+            # MAC
+            ctk.CTkLabel(row, text=mac, width=130, anchor="center",
+                         font=ctk.CTkFont(family="Consolas", size=12),
+                         text_color="#b39ddb").pack(side="left", padx=3)
+            # Hostname (muestra 'Desconocido' si no se resuelve)
+            if hostname and hostname != "Desconocido":
+                host_txt = hostname[:15]
+                host_color = "#80cbc4"
+            else:
+                host_txt = "Desconocido"
+                host_color = "#607d8b"
 
-            # Botón → ARP
+            ctk.CTkLabel(row, text=host_txt, width=110, anchor="center",
+                         font=ctk.CTkFont(size=12),
+                         text_color=host_color).pack(side="left", padx=3)
+            # Alias (de la BD) o indicador de nuevo dispositivo
+            es_nuevo = item.get("es_nuevo", False)
+            if alias:
+                alias_txt = alias[:20]
+                alias_color = "#ffd54f"
+            elif es_nuevo:
+                alias_txt = "★ Nuevo"
+                alias_color = "#00e676"
+            elif known:
+                alias_txt = "✓ Guardado"
+                alias_color = "#558855"
+            else:
+                alias_txt = "—"
+                alias_color = "#444444"
+
+            ctk.CTkLabel(row, text=alias_txt, width=140, anchor="center",
+                         font=ctk.CTkFont(size=12, weight="bold" if (alias or es_nuevo) else "normal"),
+                         text_color=alias_color).pack(side="left", padx=3)
+            # Rol
+            ctk.CTkLabel(row, text=rol, width=65, anchor="center",
+                         font=ctk.CTkFont(size=12),
+                         text_color="#ffca28" if "Gateway" in rol else "#90a4ae").pack(side="left", padx=3)
+
+            # Botón ARP
             ctk.CTkButton(
-                row, text="→ ARP", width=66, height=24,
-                fg_color="#4a0000", hover_color="#7b1a1a",
-                font=ctk.CTkFont(size=11),
+                row, text="ARP", width=40, height=26,
+                fg_color="#5c1a1a", hover_color="#8b2a2a",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                corner_radius=5,
                 command=lambda _ip=ip: self._scan_fill_arp(_ip)
             ).pack(side="left", padx=3, pady=3)
 
-            # Botón → DDoS
+            # Botón MAC
             ctk.CTkButton(
-                row, text="→ DDoS", width=66, height=24,
-                fg_color="#1a1a4a", hover_color="#2e2e8a",
-                font=ctk.CTkFont(size=11),
+                row, text="MAC", width=40, height=26,
+                fg_color="#5c3a0a", hover_color="#8b5a2a",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                corner_radius=5,
+                command=lambda _mac=mac: self._scan_fill_arp(_mac)
+            ).pack(side="left", padx=3, pady=3)
+
+            # Botón DDoS
+            ctk.CTkButton(
+                row, text="DDoS", width=44, height=26,
+                fg_color="#1a1a5c", hover_color="#2e2e8b",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                corner_radius=5,
                 command=lambda _ip=ip: self._scan_fill_ddos(_ip)
             ).pack(side="left", padx=3, pady=3)
 
-            # Botón 📋 Copiar IP
+            # Botón Etiqueta
+            btn_eti_txt = "🏷️ Editar etiqueta" if alias else "🏷️ Añadir etiqueta"
             ctk.CTkButton(
-                row, text="📋", width=32, height=24,
-                fg_color="#1a1a1a", hover_color="#333333",
+                row, text=btn_eti_txt, width=120, height=26,
+                fg_color="#1f2937", hover_color="#374151",
                 font=ctk.CTkFont(size=11),
-                command=lambda _ip=ip: (self.root.clipboard_clear(), self.root.clipboard_append(_ip))
-            ).pack(side="left", padx=2, pady=3)
+                corner_radius=5,
+                command=lambda _m=mac, _ip=ip, _h=hostname: self._scan_edit_device(_m, _ip, _h)
+            ).pack(side="left", padx=3, pady=3)
+
+    def _scan_guardar_bd(self):
+        """Guarda todos los dispositivos del último escaneo en la base de datos."""
+        if not self._scan_results_data:
+            messagebox.showinfo("BD", "No hay resultados de escaneo para guardar.")
+            return
+        guardar_escaneo(self._scan_results_data)
+        # Re-enriquecer para mostrar el estado actualizado
+        self._scan_results_data = enriquecer_resultados(self._scan_results_data)
+        self._scan_apply_filter()
+        n = len(self._scan_results_data)
+        self._log(f"[BD] {n} dispositivos guardados en la base de datos.", "ok")
+        messagebox.showinfo("BD", f"{n} dispositivos guardados correctamente.")
+
+    def _scan_edit_device(self, mac, ip, hostname):
+        """Abre un diálogo para editar la etiqueta (alias) y notas de un dispositivo."""
+        # Obtener datos actuales de la BD
+        alias_actual = obtener_alias(mac)
+        notas_actual = obtener_notas(mac)
+
+        # Crear ventana de diálogo
+        dlg = ctk.CTkToplevel(self.root)
+        dlg.title(f"🏷️ Etiquetar dispositivo — {ip}")
+        dlg.geometry("440x410")
+        dlg.minsize(440, 410)
+        dlg.attributes("-topmost", True)
+        dlg.grab_set()
+
+        ctk.CTkLabel(dlg, text=f"🏷️ Etiquetar Dispositivo: {ip}",
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#4fc3f7").pack(anchor="w", padx=16, pady=(16, 2))
+        ctk.CTkLabel(dlg, text=f"MAC: {mac}",
+                     font=ctk.CTkFont(family="Consolas", size=11),
+                     text_color="#ce93d8").pack(anchor="w", padx=16, pady=(0, 2))
+        if hostname and hostname != "Desconocido":
+            ctk.CTkLabel(dlg, text=f"Host: {hostname}",
+                         font=ctk.CTkFont(size=11),
+                         text_color="#80cbc4").pack(anchor="w", padx=16, pady=(0, 2))
+
+        ctk.CTkFrame(dlg, height=1, fg_color="#252525").pack(fill="x", padx=16, pady=8)
+
+        # Etiqueta / Alias
+        ctk.CTkLabel(dlg, text="Etiqueta / Nombre personalizado (Alias):",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", padx=16, pady=(0, 2))
+        alias_entry = ctk.CTkEntry(dlg, width=400, fg_color="#111111",
+                                    border_color="#2a2a2a",
+                                    placeholder_text="Ej: PC Principal, Portátil, Router...")
+        alias_entry.pack(padx=16, pady=(0, 2))
+        if alias_actual:
+            alias_entry.insert(0, alias_actual)
+
+        ctk.CTkLabel(dlg, text="💡 Presiona Enter o clic en 'Guardar Etiqueta' para aplicar.",
+                     font=ctk.CTkFont(size=10), text_color="#78909c").pack(anchor="w", padx=16, pady=(0, 8))
+
+        # Notas
+        ctk.CTkLabel(dlg, text="Notas adicionales:",
+                     font=ctk.CTkFont(size=12)).pack(anchor="w", padx=16, pady=(0, 2))
+        notas_box = ctk.CTkTextbox(dlg, height=75, fg_color="#0a0a0a",
+                                    border_width=1, border_color="#1e1e1e",
+                                    font=("Consolas", 12))
+        notas_box.pack(fill="x", padx=16, pady=(0, 12))
+        if notas_actual:
+            notas_box._textbox.insert("1.0", notas_actual)
+
+        def _guardar():
+            nuevo_alias = alias_entry.get().strip()
+            nuevas_notas = notas_box._textbox.get("1.0", "end").strip()
+            establecer_alias(mac, nuevo_alias)
+            establecer_notas(mac, nuevas_notas)
+            # Actualizar los datos en memoria y re-renderizar
+            for item in self._scan_results_data:
+                if item.get("mac", "").lower() == mac.lower():
+                    item["alias"] = nuevo_alias
+                    item["notas"] = nuevas_notas
+                    item["known"] = bool(nuevo_alias or nuevas_notas)
+            self._scan_apply_filter()
+            self._log(f"[BD] Etiqueta guardada: {mac} ({ip}) → '{nuevo_alias}'", "ok")
+            dlg.destroy()
+
+        # Permitir guardar pulsando Enter en el campo de etiqueta
+        alias_entry.bind("<Return>", lambda _: _guardar())
+        alias_entry.focus_set()
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(0, 14))
+        self._btn(btn_row, "💾 Guardar Etiqueta", _guardar, "#1565c0", width=150, height=34).pack(side="left", padx=(0, 8))
+        self._btn(btn_row, "Cancelar", dlg.destroy, "#37474f", width=100, height=34).pack(side="left")
 
     def _scan_fill_arp(self, ip: str):
-        """Rellena el campo IP víctima de la pestaña ARP y cambia a esa pestaña."""
-        if self.arp_ip:
-            self.arp_ip.delete(0, "end")
-            self.arp_ip.insert(0, ip)
+        """Rellena el campo objetivo de la pestaña ARP y cambia a esa pestaña."""
+        if self.arp_obj:
+            self.arp_obj.delete(0, "end")
+            self.arp_obj.insert(0, ip)
         self.nb.set("⚡ ARP")
 
     def _scan_fill_ddos(self, ip: str):

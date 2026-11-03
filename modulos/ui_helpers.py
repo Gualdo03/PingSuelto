@@ -39,15 +39,15 @@ def _campo(parent, label, placeholder="", valor="", width=220):
     return e
 
 
-def _out(parent, height=8):
+def _out(parent, height=8, expand=True, **pack_kw):
     """Área de texto con scroll usando CTkTextbox nativo de CustomTkinter."""
     txt = ctk.CTkTextbox(
         parent,
-        height=height * 22,          # CTkTextbox usa píxeles, no líneas
+        height=int(height * 22),          # CTkTextbox usa píxeles, no líneas
         fg_color="#0a0a0a",
         text_color="#b0bec5",
-        font=("Consolas", 13),
-        corner_radius=6,
+        font=("Consolas", 11),
+        corner_radius=5,
         border_width=1,
         border_color="#1e1e1e",
         scrollbar_button_color="#252525",
@@ -55,7 +55,9 @@ def _out(parent, height=8):
         activate_scrollbars=True,
         wrap="word",
     )
-    txt.pack(fill="both", expand=True, pady=(2, 4))
+    kw = {"fill": "both" if expand else "x", "expand": expand, "pady": (2, 4)}
+    kw.update(pack_kw)
+    txt.pack(**kw)
 
     # Compatibilidad con el motor de logging que usa insert / delete / see / tag_config / index
     # CTkTextbox delega en un tk.Text interno: exponemos los métodos necesarios
